@@ -10,9 +10,9 @@ services:
       - db_password
       - db_root_password
     volumes:
-      - mariadb:/var/lib/mysql
+      - mariadb_data:/var/lib/mysql
     networks:
-      - inception
+      - inception_network
     expose:
       - "3306"
     restart: unless-stopped
@@ -22,21 +22,43 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+  
+  nginx:
+    container_name: nginx
+    image: nginx:inception
+    build: ./requirements/nginx
+
+    ports:
+      - "443:443"
+    volumes:
+      - wordpress_data:/var/www/html
+    networks:
+      - inception_network
+    depends_on:
+      - wordpress
+    restart: unless-stopped
 
 # Named volumes. The local driver stores their data in /home/<login>/data/* on the host.
 # They are still Docker named volumes.
 volumes:
-  mariadb:
-    name: mariadb
+  mariadb_data:
+    name: mariadb_data
     driver: local
     driver_opts:
       type: none
       o: bind
       device: /home/${LOGIN}/data/mariadb
+  wordpress_data:
+    name: wordpress_data
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${LOGIN}/data/wordpress
 
 networks:
-  inception:
-    name: inception
+  inception_network:
+    name: inception_network
     driver: bridge
 
 # Host mounted at /secrets/<name_secret.txt>
