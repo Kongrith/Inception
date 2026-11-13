@@ -12,20 +12,21 @@ service image is pulled.
 
 The stack serves a WordPress website over HTTPS at `https://khkomasa.42.fr`:
 
-| Container   | Content                         | Listens on          |
-|-------------|---------------------------------|---------------------|
-| `nginx`     | NGINX, TLSv1.2 / TLSv1.3 only   | 443 (only port published to the host) |
-| `wordpress` | WordPress + php-fpm 8.2 (no nginx) | 9000 (FastCGI, internal) |
-| `mariadb`   | MariaDB (no nginx)              | 3306 (internal)     |
+| Container   | Content                            | Listens on                            |
+|-------------|------------------------------------|---------------------------------------|
+| `nginx`     | NGINX, TLSv1.2 / TLSv1.3 only      | 443 (only port published to the host) |
+| `wordpress` | WordPress + php-fpm 8.2 (no nginx) | 9000 (FastCGI, internal)              |
+| `mariadb`   | MariaDB (no nginx)                 | 3306 (internal)                       |
 
-Two named volumes keep the data (`mariadb` for the database, `wordpress` for
-the website files), stored on the host in `/home/khkomasa/data`. The three
-containers talk over a dedicated bridge network called `inception`.
+Two named volumes keep the data (`mariadb_data` for the database,
+`wordpress_data` for the website files), stored on the host in
+`/home/khkomasa/data`. The three containers talk over a dedicated bridge
+network called `inception_network`.
 
 ```
  browser ──443/TLS──> nginx ──9000/FastCGI──> wordpress ──3306──> mariadb
                         │                        │                  │
-                        └──── wordpress volume ──┘           mariadb volume
+                        └──── wordpress_data ────┘            mariadb_data
 ```
 
 ## Instructions
@@ -33,17 +34,21 @@ containers talk over a dedicated bridge network called `inception`.
 Requirements: a Linux VM with Docker Engine, the Docker Compose plugin,
 `make` and `sudo`.
 
-1. Put your login in `srcs/.env` (`LOGIN=` and `DOMAIN_NAME=`).
-2. Point the domain to the VM: `make hosts` (adds `127.0.0.1 login.42.fr`
-   to `/etc/hosts`).
-3. Build and start everything: `make`
-   - the first run creates `/home/login/data/{mariadb,wordpress}` and
-     generates random passwords in `secrets/` (ignored by git).
-4. Open `https://login.42.fr` (accept the self-signed certificate warning).
-   The admin panel is at `https://login.42.fr/wp-admin`.
+1. Create `srcs/.env` (not in git) with the non-secret settings. The full
+   list of variables and an example are in [DEV_DOC.md](DEV_DOC.md).
+2. Create the four password files in `secrets/` (not in git):
+   `db_password.txt`, `db_root_password.txt`, `wp_admin_password.txt`,
+   `wp_user_password.txt`.
+3. Point the domain to the VM:
+   `echo "127.0.0.1 khkomasa.42.fr" | sudo tee -a /etc/hosts`
+4. Build and start everything: `make`
+   - this creates `/home/<login>/data/{mariadb,wordpress}`, builds the three
+     images and starts the containers in the background.
+5. Open `https://khkomasa.42.fr` (accept the self-signed certificate
+   warning). The admin panel is at `https://khkomasa.42.fr/wp-admin`.
 
-Other targets: `make down`, `make stop`, `make start`, `make ps`,
-`make logs`, `make clean`, `make fclean`, `make re`.
+Other targets: `make build`, `make down`, `make stop`, `make start`,
+`make restart`, `make ps`, `make logs`, `make clean`, `make fclean`, `make re`.
 See [USER_DOC.md](USER_DOC.md) and [DEV_DOC.md](DEV_DOC.md) for details.
 
 ## Project description
@@ -52,18 +57,20 @@ See [USER_DOC.md](USER_DOC.md) and [DEV_DOC.md](DEV_DOC.md) for details.
 
 ```
 .
-├── Makefile                 # entry point: setup, build, run, clean
-├── secrets/                 # generated locally, not in git
-│   ├── credentials.txt      # WordPress admin + user passwords
-│   ├── db_password.txt      # MariaDB password for the WordPress user
-│   └── db_root_password.txt # MariaDB root password
+├── Makefile                     # entry point: checks, build, run, clean
+├── README.md / USER_DOC.md / DEV_DOC.md
+├── secrets/                     # created locally, not in git
+│   ├── db_password.txt          # MariaDB password of the WordPress DB user
+│   ├── db_root_password.txt     # MariaDB root password
+│   ├── wp_admin_password.txt    # WordPress administrator password
+│   └── wp_user_password.txt     # WordPress second user password
 └── srcs/
-    ├── .env                 # non-secret configuration
+    ├── .env                     # non-secret configuration, not in git
     ├── docker-compose.yml
     └── requirements/
-        ├── mariadb/   (Dockerfile, conf/50-server.cnf, tools/entrypoint.sh)
-        ├── wordpress/ (Dockerfile, conf/www.conf,      tools/entrypoint.sh)
-        └── nginx/     (Dockerfile, conf/inception.conf.template, tools/entrypoint.sh)
+        ├── mariadb/   (Dockerfile, conf/50-server.cnf, tools/init.sh)
+        ├── wordpress/ (Dockerfile, conf/www.conf,      tools/init.sh)
+        └── nginx/     (Dockerfile, conf/nginx.conf)
 ```
 
 The `Makefile` calls `docker compose`, which builds one image per service
@@ -75,24 +82,26 @@ from its Dockerfile (image name = service name, tag `inception`, never
 - **Debian bookworm** as base image: well-known packages
   (`mariadb-server`, `php8.2-fpm`, `nginx`) and it is the penultimate stable
   release required by the subject.
-- **Each main process is PID 1.** Each entrypoint script only does the
-  one-time setup and then calls `exec` so the shell is *replaced* by the real
-  service: `mariadbd`, `php-fpm8.2 -F`, `nginx -g "daemon off;"`. The
-  services run in the foreground, receive signals from `docker stop`
-  correctly, and no `tail -f` / `sleep infinity` / `while true` trick is used.
-- **Idempotent setup.** MariaDB only creates the database and user when the
-  volume is empty; WordPress is installed with WP-CLI and every step
-  (download, config, install, second user) is skipped if already done, so a
-  restart never breaks existing data.
-- **Two WordPress users**: an administrator whose name cannot contain
-  "admin" (the entrypoint refuses to start otherwise) and an *author*.
-- **TLS** with a self-signed certificate generated at first start for
-  `DOMAIN_NAME`; `ssl_protocols TLSv1.2 TLSv1.3;` and no port 80.
+- **Each main process is PID 1.** The MariaDB and WordPress init scripts
+  only do the one-time setup and then call `exec`, so the shell is
+  *replaced* by the real service (`mariadbd`, `php-fpm8.2 -F`). NGINX is
+  started directly with `nginx -g "daemon off;"`. The services run in the
+  foreground, receive the signals sent by `docker stop`, and no `tail -f` /
+  `sleep infinity` / `while true` trick is used.
+- **Idempotent setup.** MariaDB only creates the database and its user when
+  the database does not exist yet in the volume; WordPress is installed with
+  WP-CLI and every step (download, config, install, second user) is skipped
+  if already done, so a restart never breaks existing data.
+- **Two WordPress users**: an administrator (`WP_ADMIN_USER`, whose name
+  must not contain "admin") and a second user (`WP_USER`) with the *author*
+  role.
+- **TLS** with a self-signed certificate generated when the nginx image is
+  built; `ssl_protocols TLSv1.2 TLSv1.3;` and nothing listens on port 80.
 - **Restart policy** `unless-stopped`: a crashed container is restarted
   automatically, but a container stopped on purpose stays stopped.
-- **Start order**: MariaDB has a healthcheck, and WordPress only starts once
-  it is healthy (it also waits, with a limited number of tries, until it can
-  log in).
+- **Start order**: MariaDB has a healthcheck (`mariadb-admin ping`), and
+  WordPress only starts once MariaDB is healthy; NGINX starts after
+  WordPress.
 
 ### Virtual Machines vs Docker
 
@@ -111,16 +120,18 @@ with `docker inspect`, inherited by every child process and often end up in
 logs or in git. Docker secrets are files mounted read-only at
 `/run/secrets/<name>` only in the containers that need them, and their
 source files stay out of git. Here, `.env` holds only non-sensitive settings
-(domain, database name, user names) and every password comes from a secret.
+(login, domain, database name, user names, e-mails) and every password
+comes from a secret.
 
 ### Docker Network vs Host Network
 
 With `network: host` a container shares the host's network stack: no
 isolation, every port it opens is open on the host, and names cannot be
-resolved between containers. A user-defined bridge network (`inception`)
-gives the containers a private network with an internal DNS (`mariadb`,
-`wordpress` are resolved by name) and nothing is reachable from outside
-except what is explicitly published — here only `443` on nginx.
+resolved between containers. A user-defined bridge network
+(`inception_network`) gives the containers a private network with an
+internal DNS (`mariadb`, `wordpress` are resolved by name) and nothing is
+reachable from outside except what is explicitly published — here only
+`443` on nginx.
 
 ### Docker Volumes vs Bind Mounts
 

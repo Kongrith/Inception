@@ -1,6 +1,7 @@
 FROM debian:bookworm
 
 RUN apt-get update && apt-get install -y nginx openssl \
+    && rm -f /etc/nginx/sites-enabled/default \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/nginx/ssl && \

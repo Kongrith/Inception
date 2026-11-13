@@ -1,0 +1,20 @@
+# version control
+.git
+.gitignore
+
+# editor / OS
+*.swp
+*.swo
+*~
+.vscode
+.idea
+.DS_Store
+
+# docs
+README.md
+*.md
+
+# secrets, in case they ever end up here
+.env
+*.txt
+secrets
