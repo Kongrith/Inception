@@ -1,0 +1,50 @@
+name: inception
+
+services:
+  mariadb:
+    container_name: mariadb
+    image: mariadb:inception
+    build: ./requirements/mariadb
+    env_file: .env
+    secrets:
+      - db_password
+      - db_root_password
+    volumes:
+      - mariadb:/var/lib/mysql
+    networks:
+      - inception
+    expose:
+      - "3306"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "--silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+# Named volumes. The local driver stores their data in /home/<login>/data/* on the host.
+# They are still Docker named volumes.
+volumes:
+  mariadb:
+    name: mariadb
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/${LOGIN}/data/mariadb
+
+networks:
+  inception:
+    name: inception
+    driver: bridge
+
+# Host mounted at /secrets/<name_secret.txt>
+# Container mounted at /run/secrets/<name_secret>
+secrets:
+  db_password:
+    file: ../secrets/db_password.txt
+  db_root_password:
+    file: ../secrets/db_root_password.txt
+  credentials:
+    file: ../secrets/credentials.txt
